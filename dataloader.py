@@ -28,4 +28,12 @@ TODO
 - generate dataset of clue values and ranks
 - standardize clues (mean and variance)
 - train lightgbm model to predict ranks based on clue data
+Clues:
+QAF: Query Absolute Frequency = Count of term occurrences in the query
+QRF: Query Relative Frequency = QAF / total number of occurrences of all terms in the query
+DAF: Document Absolute Frequency = Count of term occurrences in the document
+DRF: Document Relative Frequency = DAF / total number of occurrences of all terms in the document
+IDF: Inverse Document Frequency
+RFAD: Relative frequency in all documents = total number of term occurrences of the term in the collection divided by the total number of occurrences of all terms in the entire collection
+
 """
