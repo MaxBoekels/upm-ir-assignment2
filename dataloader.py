@@ -1,5 +1,7 @@
 import pandas as pd
 from lightgbm import LGBMRanker
+from IPython.display import display
+
 
 
 """
@@ -83,6 +85,13 @@ class QueryRanking:
     
     """
     TODO
+    Some function to calculate precision, recall etc on unseen data that labels are known for
+    """
+    def evaluate_performance(self):
+        pass
+
+    """
+    TODO
     """
     def query_absolute_frequency(self, rank_data: pd.DataFrame, query: str) -> pd.Series:
         pass
@@ -138,3 +147,16 @@ Main function to create QueryRanking object and generate model
 def main():
     queries = ['glucose in blood', 'bilirubin in plasma', 'White blood cells count']
     qr = QueryRanking(queries)
+
+    # change when needed
+    column_names = ['loinc_num', 'loinc_common_name', 'component', 'system', 'property']
+    data = pd.DataFrame(columns=column_names)
+    query = "example"
+    # get some list of data from somewhere
+
+    results = qr.predict_ranking(data, query)
+    display(results)
+
+
+if __name__ == "__main__":
+    main()
