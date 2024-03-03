@@ -1,8 +1,11 @@
 import pandas as pd
 import numpy as np
 import re
+import sys
+import os
 
-from lightgbm import LGBMRanker
+import lightgbm as lgb
+
 from IPython.display import display
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.pipeline import Pipeline
@@ -10,8 +13,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics import accuracy_score, classification_report
+
 from rank_bm25 import BM25Okapi
 from gensim.models import Word2Vec
+from scipy.stats import spearmanr
 
 
 
@@ -37,12 +43,12 @@ class QueryRanking:
     queries - list of query inputs that are responsible for a specific data ranking. 
     Must be an excel sheet in the same file where the name is the query. The format has to match the sheets provided.
     """
-    def __init__(self, queries) -> None:
+    def __init__(self) -> None:
         self.model = None
         self.train_data = None
         self.test_data = None
         self.val_data = None
-        self.queries = queries
+        self.train_queries = ['glucose in blood', 'bilirubin in plasma', 'White blood cells count', 'Serum cholesterol', 'Liver enzyme']
         self.column_names = ['loinc_num', 'loinc_common_name', 'component', 'system', 'property']
 
         # initialize tf-idf vectorizer
@@ -52,11 +58,11 @@ class QueryRanking:
         #self.word2vec_model = Word2Vec.load('GoogleNews-vectors-negative300.bin')
 
         # load excel file
-        dataset = pd.read_excel("loinc_dataset-v2.xlsx", sheet_name=queries, header=2, names=self.column_names)
+        dataset = pd.read_excel("extended_dataset_.xlsx", sheet_name=self.train_queries, header=2, names=self.column_names)
 
         # save data into dictionary where the name is the query and the value is a dataframe containing the ranking results.
         self.data = {}
-        for query in self.queries:
+        for query in self.train_queries:
             self.data[query] = dataset[query].copy()
 
             # create new attribute content that contains the content from all columns as one string
@@ -72,12 +78,12 @@ class QueryRanking:
     
     def train_model(self):
         """
-        TODO
         Train model based on data provided
+        Saves the trained model in the variable self.model
         """
         model_data = pd.DataFrame(columns=['tfidf_score', 'bm25_score', 'rank'])
         groups = []
-        for query in self.queries:
+        for query in self.train_queries:
             data = self.data[query]
 
             # generate clue data
@@ -105,23 +111,30 @@ class QueryRanking:
         y = model_data['rank']  # Target
 
         # Initialize and train model
-        self.model = LGBMRanker(
+        self.model = lgb.LGBMRanker(
             label_gain=[i for i in range(y.max() + 1)]
-
-
-        ) # Initialize Light GBM Ranker model
+        ) 
+        
         self.model.fit(X, y, group=groups)  # Train the model
+
+        self.get_train_error()
+
 
         
     def predict_ranking(self, rank_data: pd.Series, query: str) -> pd.DataFrame:
         """
-        TODO
-        Predict by ranking an input dataframe, converting it to clue data and predicting using the model
+        Predict by ranking an input Series of documents, converting it to clue data and predicting using the model
+        Input: 
+            rank_data: Series of documents
+            query: String containing the query
+        Output: 
+            Dataframe that contains the predicted ranks for the input documents and the query.
         """
         if self.model is None:
             self.train_model()  # Train the model if not already trained
         
-        result = rank_data.copy()
+        result = pd.DataFrame()
+        result['content'] = rank_data.copy()
         # Generate clue data for testing data to apply the model to
         data = self.generate_clue_data(rank_data, query)
 
@@ -136,12 +149,21 @@ class QueryRanking:
         # Add predictions to result dataframe
         result['predicted_rank'] = predictions
 
+        # transform predictions into integer ranks
+        result['predicted_rank'] = result['predicted_rank'].rank(method='dense', ascending=False).astype(int)
+
         return result
     
-    """
-    Generate clue data for an input dataframe
-    """
+    
     def generate_clue_data(self, rank_data: pd.Series, query: str) -> pd.DataFrame:
+        """
+        Generate clue data for an input series of documents.
+        Input:
+            rank_data - Series that contains documents
+            query - String that contains the query
+        Output:
+            Dataframe that contains the score metrics for each document-query pair
+        """
         # initialize dataframe
         data_columns = ['tfidf_score', 'bm25_score']
         data = pd.DataFrame(columns=data_columns)
@@ -155,13 +177,28 @@ class QueryRanking:
         #data['embedding_score'] = self.embedding_score(rank_data, clean_query)
         return data
     
-    """
-    TODO
-    Some function to calculate precision, recall etc on unseen data that labels are known for
-    """
+    
     def evaluate_performance(self, ranking: pd.Series, prediction: pd.Series):
+        """
+        TODO
+        Some function to calculate precision, recall etc on unseen data that labels are known for
+        """
         pass
 
+    def get_train_error(self):
+        """
+        TODO
+        Calculate performance on seen data
+        """
+        # load subset of training data
+        query = self.train_queries[0]
+        train_results = self.predict_ranking(self.data[query]['content'], query)
+        train_results['correct_rank'] = self.data[query]['rank']
+
+        print("Spearman Correlation:")
+        print(spearmanr(train_results['predicted_rank'], train_results['correct_rank']).correlation)
+        
+    
 
     def embedding_score(self, rank_data: pd.Series, query: str) -> pd.Series:
         """
@@ -239,13 +276,6 @@ class QueryRanking:
         return pd.Series(scores)
 
     
-    """
-    Adjust clue value column by standardizing with mean and standard deviation
-    """
-    def standardize_values(self, column: pd.Series) -> pd.Series:
-        return (column - column.mean()) / column.std()
-    
-    
     def clean_string(self, input_string: str) -> str:
         """
         Helper function to clean the string from double spaced, leading and trailing spaces and special characters
@@ -256,6 +286,7 @@ class QueryRanking:
         cleaned_string = re.sub(r'\s+', ' ', cleaned_string)
         # Strip leading and trailing spaces
         cleaned_string = cleaned_string.strip()
+        cleaned_string = cleaned_string.lower()
         return cleaned_string
 
 
@@ -264,46 +295,51 @@ class QueryRanking:
 
 
 
-"""
-Main function to create QueryRanking object and generate model
-"""
 def main():
-    queries = ['glucose in blood', 'bilirubin in plasma', 'White blood cells count']
-    qr = QueryRanking(queries)
-
-    # load query data
-    query_data = pd.read_excel("Serum_cholesterol_.xlsx", sheet_name=['query'], header=2, names=qr.column_names)
-
-    print(query_data)
-    data = query_data['query'].copy()
-
-    # create new attribute content that contains the content from all columns as one string
-    data['content'] = data.apply(lambda row: ' '.join(row), axis=1)
-    data['content'] = data['content'].apply(qr.clean_string)
-
-    
-    # create new attribute rank that describes the rank that each document has for the specific query
-    data['rank'] = len(data.index) - data.index
-    # print(query)
-    # print(self.data[query].head(5))
-    result = qr.predict_ranking(data['content'], 'Serum cholesterol')
-
-    result['correct_rank'] = data['rank']
-
-    print(result.head())
     """
-    # change when needed
-    column_names = ['loinc_num', 'loinc_common_name', 'component', 'system', 'property']
-    data = pd.DataFrame(columns=column_names)
-    query = "example"
-    # get some list of data from somewhere
-
-    results = qr.predict_ranking(data, query)
-    display(results)
-
-    # evaluate accuracy using the function evaluate_performance()
+    Called when executing the file. 
+    When executed through the terminal, no parameters are required.
     """
 
+    qr = QueryRanking()
+
+    while True:
+        print("An Excel file is needed that contains a sheet 'query' that contains a list of items in the correct format")
+        query_path = input("Add the path for the data to be ranked: ")
+        while True:
+            if not os.path.isfile(query_path) or not query_path.endswith(".xlsx"):
+                query_path = input("File does not exist or has the wrong format, please enter valid file path (.xlsx): ").strip()
+                continue
+            else:
+                try:
+                    # load query data
+                    query_data = pd.read_excel(query_path, sheet_name=['query'], header=2, names=qr.column_names)
+                    break
+                except:
+                    print("Invalid excel document. Please check the requirements and adjust the file.")
+                    continue
+
+        query = input("Enter the query: ").strip()
+
+        
+        data = query_data['query'].copy()
+
+        # create new attribute content that contains the content from all columns as one string
+        data['content'] = data.apply(lambda row: ' '.join(row), axis=1)
+        data['content'] = data['content'].apply(qr.clean_string)
+        
+        # create new attribute rank that describes the rank that each document has for the specific query
+        data['rank'] = len(data.index) - data.index
+
+        # clean query string
+        query = qr.clean_string(query)
+
+        # predict ranks
+        result = qr.predict_ranking(data['content'], query)
+
+        result['correct_rank'] = data['rank']
+        result = result.sort_values(by='predicted_rank', ascending=False)
+        print(result.head(10))
 
 if __name__ == "__main__":
     main()
