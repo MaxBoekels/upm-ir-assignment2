@@ -21,28 +21,8 @@ from scipy.stats import spearmanr
 
 
 
-
-"""
-TODO
-- compute clues
-- generate dataset of clue values and ranks
-- standardize clues (mean and variance)
-- train lightgbm model to predict ranks based on clue data
-Clues:
-QAF: Query Absolute Frequency = Count of term occurrences in the query
-QRF: Query Relative Frequency = QAF / total number of occurrences of all terms in the query
-DAF: Document Absolute Frequency = Count of term occurrences in the document
-DRF: Document Relative Frequency = DAF / total number of occurrences of all terms in the document
-IDF: Inverse Document Frequency
-RFAD: Relative frequency in all documents = total number of term occurrences of the term in the collection divided by the total number of occurrences of all terms in the entire collection
-
-"""
 class QueryRanking: 
-    """ 
-    Arguments: 
-    queries - list of query inputs that are responsible for a specific data ranking. 
-    Must be an excel sheet in the same file where the name is the query. The format has to match the sheets provided.
-    """
+    
     def __init__(self) -> None:
         self.model = None
         self.train_data = None
@@ -112,13 +92,13 @@ class QueryRanking:
 
         # Initialize and train model
         self.model = lgb.LGBMRanker(
+            objective="lambdarank",
             label_gain=[i for i in range(y.max() + 1)]
         ) 
         
         self.model.fit(X, y, group=groups)  # Train the model
 
         self.get_train_error()
-
 
         
     def predict_ranking(self, rank_data: pd.Series, query: str) -> pd.DataFrame:
@@ -180,14 +160,25 @@ class QueryRanking:
     
     def evaluate_performance(self, ranking: pd.Series, prediction: pd.Series):
         """
-        TODO
-        Some function to calculate precision, recall etc on unseen data that labels are known for
+        Evaluate the performance of the model using known ground truth ranks.
+        Inputs:
+            ranking: Series containing the true ranks of the documents.
+            prediction: Series containing the predicted ranks of the documents.
+        Output:
+            Prints out the evaluation metrics.
         """
-        pass
+        # P@20
+        top_indices = set(ranking.nlargest(20).index)
+        #print(top_indices)
+        predicted_indices = set(prediction.nlargest(20).index)
+        #print(predicted_indices)
+        print("Precision @ 20:")
+        print(len(top_indices & predicted_indices)/20)
+
+
 
     def get_train_error(self):
         """
-        TODO
         Calculate performance on seen data
         """
         # load subset of training data
@@ -195,7 +186,7 @@ class QueryRanking:
         train_results = self.predict_ranking(self.data[query]['content'], query)
         train_results['correct_rank'] = self.data[query]['rank']
 
-        print("Spearman Correlation:")
+        print("Spearman Correlation of training data:")
         print(spearmanr(train_results['predicted_rank'], train_results['correct_rank']).correlation)
         
     
@@ -321,7 +312,6 @@ def main():
 
         query = input("Enter the query: ").strip()
 
-        
         data = query_data['query'].copy()
 
         # create new attribute content that contains the content from all columns as one string
@@ -339,6 +329,11 @@ def main():
 
         result['correct_rank'] = data['rank']
         result = result.sort_values(by='predicted_rank', ascending=False)
+        # create scaled version of ranks
+        scaled_rank = (result['correct_rank'] - result['correct_rank'].min()) / (result['correct_rank'].max() - result['correct_rank'].min())
+        scaled_pred = (result['predicted_rank'] - result['predicted_rank'].min()) / (result['predicted_rank'].max() - result['predicted_rank'].min())
+
+        qr.evaluate_performance(scaled_rank, scaled_pred)
         print(result.head(10))
 
 if __name__ == "__main__":
